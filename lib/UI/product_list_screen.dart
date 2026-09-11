@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:small_product_catalog_app/UI/product_details_screen.dart';
-import 'package:small_product_catalog_app/UI/widgets/product_card.dart';
-import 'package:small_product_catalog_app/UI/widgets/state_views.dart';
-import 'package:small_product_catalog_app/model/product_md.dart';
 
-enum MockState { loading, error, empty, success }
+import '../../function/product_list_fn.dart';
+import '../constant/view_state.dart';
+import 'widgets/product_card.dart';
+import 'widgets/state_views.dart';
 
 class ProductListScreen extends StatefulWidget {
   const ProductListScreen({super.key});
@@ -14,28 +14,32 @@ class ProductListScreen extends StatefulWidget {
 }
 
 class _ProductListScreenState extends State<ProductListScreen> {
-  MockState currentState = MockState.success;
+  late final ProductListFn _productListFn;
+  final TextEditingController _searchController = TextEditingController();
 
-  final List<ProductModel> mockProducts = [
-    ProductModel(
-      id: 1,
-      title: 'iPhone 15 Pro',
-      description: 'The latest iPhone',
-      price: 999.0,
-      rating: 4.8,
-      thumbnail: 'https://cdn.dummyjson.com/products/images/smartphones/iPhone%2013%20Pro/thumbnail.png',
-      images: [],
-    ),
-    ProductModel(
-      id: 2,
-      title: 'MacBook Air M2',
-      description: 'Super fast laptop',
-      price: 1199.0,
-      rating: 4.9,
-      thumbnail: 'https://cdn.dummyjson.com/products/images/laptops/Apple%20MacBook%20Pro%2014%20Inch%20Space%20Grey/thumbnail.png',
-      images: [],
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _productListFn = ProductListFn();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _productListFn.dispose();
+    super.dispose();
+  }
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification is ScrollEndNotification ||
+        notification is ScrollUpdateNotification) {
+      if (notification.metrics.pixels >=
+          notification.metrics.maxScrollExtent - 200) {
+        _productListFn.loadMore();
+      }
+    }
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,68 +57,99 @@ class _ProductListScreenState extends State<ProductListScreen> {
               horizontal: 16.0,
               vertical: 8.0,
             ),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Search products...',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: Colors.grey[200],
-              ),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _searchController,
+              builder: (context, value, child) {
+                return TextField(
+                  controller: _searchController,
+                  onChanged: _productListFn.onSearchChanged,
+                  decoration: InputDecoration(
+                    hintText: 'Search products...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: value.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              _productListFn.onSearchChanged('');
+                            },
+                          )
+                        : null,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide.none,
+                    ),
+                    filled: true,
+                    fillColor: Colors.grey[200],
+                  ),
+                );
+              },
             ),
           ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await Future.delayed(const Duration(seconds: 1));
+      body: AnimatedBuilder(
+        animation: _productListFn,
+        builder: (context, child) {
+          return RefreshIndicator(
+            onRefresh: () => _productListFn.fetchProducts(refresh: true),
+            child: _buildBody(),
+          );
         },
-        child: _buildBody(),
       ),
     );
   }
 
   Widget _buildBody() {
-    switch (currentState) {
-      case MockState.loading:
+    switch (_productListFn.state) {
+      case ViewState.loading:
         return const LoadingView();
-      case MockState.error:
+      case ViewState.error:
         return ErrorView(
-          message: 'Failed to connect to the server.',
-          onRetry: () {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('Retrying...')));
-          },
+          message: _productListFn.errorMessage,
+          onRetry: () => _productListFn.fetchProducts(refresh: true),
         );
-      case MockState.empty:
+      case ViewState.empty:
         return const EmptyView();
-      case MockState.success:
-        return GridView.builder(
-          padding: const EdgeInsets.all(16),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            childAspectRatio: 0.75,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-          ),
-          itemCount: mockProducts.length,
-          itemBuilder: (context, index) {
-            final product = mockProducts[index];
-            return ProductCard(
-              product: product,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => ProductDetailScreen(product: product),
+      case ViewState.success:
+        return NotificationListener<ScrollNotification>(
+          onNotification: _onScrollNotification,
+          child: Column(
+            children: [
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    childAspectRatio: 0.75,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
                   ),
-                );
-              },
-            );
-          },
+                  itemCount: _productListFn.products.length,
+                  itemBuilder: (context, index) {
+                    final product = _productListFn.products[index];
+                    return ProductCard(
+                      product: product,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                ProductDetailScreen(productId: product.id),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              if (_productListFn.isFetchingMore)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
         );
     }
   }
